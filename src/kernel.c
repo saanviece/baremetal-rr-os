@@ -4,6 +4,7 @@
 #include "kernel.h"
 #include "timer.h"
 #include "context.h"
+#include "uart.h"
 
 tcb_t *volatile rr_current;                     /* task that owns the CPU right now */
 
@@ -11,6 +12,10 @@ static tcb_t   tcbs[MAX_TASKS + 1];             /* [0] = idle task, [1..MAX_TASK
 static uint8_t stacks[MAX_TASKS + 1][STACK_SIZE];
 static uint8_t ntasks;                          /* user tasks created so far */
 static volatile uint32_t ticks;                 /* 1 ms ticks since start */
+static volatile uint16_t switches;              /* how many times the CPU changed task */
+static uint8_t slice_left = SLICE_TICKS;        /* ticks left in the running task's slice */
+static tcb_t  *rr_last;                         /* the user task that had the last turn (ring position) */
+volatile uint8_t kernel_fault;                  /* 0 = fine, else (id of the task that overflowed) + 1 */
 
 /* Runs if a task function ever returns: mark it dead and wait to be preempted for good. */
 __attribute__((used, noinline)) static void task_exit(void)
@@ -42,9 +47,22 @@ static uint8_t *build_frame(uint8_t *stack, void (*fn)(void))
     return sp;                                  /* first free byte below r31 */
 }
 
+/* Runs only when no user task is READY. `sleep` halts the CPU until the next interrupt (idle mode). */
+static void idle_task(void)
+{
+    SMCR = (1 << SE);                           /* allow the sleep instruction (mode bits 0 = idle) */
+    for (;;)
+        asm volatile("sleep");
+}
+
 void kernel_init(void)
 {
     ntasks = 0;
+    rr_last = 0;
+    tcbs[0].id        = 0;                      /* the idle task is not in the ring */
+    tcbs[0].state     = TASK_READY;
+    tcbs[0].stack_low = stacks[0];
+    tcbs[0].sp        = build_frame(stacks[0], idle_task);
 }
 
 tcb_t *kernel_create(void (*fn)(void))
@@ -67,10 +85,60 @@ tcb_t *kernel_create(void (*fn)(void))
 
 /* ---- the tick: called from the timer ISR with interrupts OFF, after the context is saved ---- */
 
+/* Stack overflow: stop everything, say so on the UART and blink the LED fast. Never returns. */
+__attribute__((noreturn)) static void kernel_panic(const tcb_t *t)
+{
+    cli();
+    kernel_fault = t->id + 1;                   /* +1 so that task 0 (idle) is also distinguishable from "no fault" */
+    uart_puts("\r\n!STACK OVERFLOW T");
+    uart_putc('0' + t->id);
+    uart_puts("\r\n");
+    DDRB |= (1 << PB5);
+    for (;;) {
+        PINB = (1 << PB5);
+        for (volatile uint16_t i = 0; i < 20000; i++) {}
+    }
+}
+
+/* Is the stack of task t still intact? (guard bytes untouched and SP not inside the guard) */
+static uint8_t stack_ok(const tcb_t *t)
+{
+    for (uint8_t i = 0; i < CANARY_LEN; i++)
+        if (t->stack_low[i] != STACK_FILL)
+            return 0;
+    return t->sp >= t->stack_low + CANARY_LEN;
+}
+
+/* Round-Robin: go once around the ring, starting after the last user task that ran. */
+static tcb_t *pick_next(void)
+{
+    tcb_t *t = rr_last;
+    if (t) {
+        do {
+            t = t->next;
+            if (t->state == TASK_READY) {
+                rr_last = t;
+                return t;
+            }
+        } while (t != rr_last);                 /* stop after checking rr_last itself */
+    }
+    return &tcbs[0];                            /* nobody is ready: run the idle task */
+}
+
+/* Called from the timer ISR every 1 ms, with interrupts OFF and the context already saved. */
 __attribute__((used)) void kernel_tick(void)
 {
     ticks++;
-    rr_current = rr_current->next;              /* M5: switch to the next task on EVERY tick */
+    if (!stack_ok(rr_current))
+        kernel_panic(rr_current);
+    if (--slice_left && rr_current->state == TASK_READY)
+        return;                                 /* slice not over: same task keeps the CPU */
+    slice_left = SLICE_TICKS;
+    tcb_t *next = pick_next();
+    if (next != rr_current) {
+        rr_current = next;                      /* the assembly after this call performs the switch */
+        switches++;
+    }
 }
 
 /*
@@ -91,7 +159,8 @@ ISR(TIMER1_COMPA_vect, ISR_NAKED)
 
 void kernel_start(void)
 {
-    rr_current = &tcbs[1];                      /* first user task goes first */
+    rr_last = ntasks ? &tcbs[1] : 0;            /* first user task goes first ... */
+    rr_current = ntasks ? &tcbs[1] : &tcbs[0];  /* ... or idle if there is none */
     timer_start();
     asm volatile(
         "cli                    \n\t"
@@ -109,4 +178,13 @@ uint32_t kernel_ticks(void)
     uint32_t t = ticks;
     SREG = sreg;                                /* restore the previous I-bit (not a blind sei) */
     return t;
+}
+
+uint16_t kernel_switches(void)
+{
+    uint8_t sreg = SREG;
+    cli();
+    uint16_t n = switches;
+    SREG = sreg;
+    return n;
 }

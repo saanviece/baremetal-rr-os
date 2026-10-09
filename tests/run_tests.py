@@ -3,6 +3,8 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from simlib import *
 
+SLICE = 10          # SLICE_TICKS default
+
 
 def t_m1():
     r = Report("M1  LED blink on PB5 (direct register writes)")
@@ -88,7 +90,7 @@ def t_m4():
 
 def t_m5():
     r = Report("M5  context switch (naked ISR) - switch on every tick")
-    elf = build("m5_switch")
+    elf = build("m5_switch", "-DSLICE_TICKS=1")
     ev = run(elf, ms=200, args=["-v", "11", "-k", "rr_current", "-s", "count", "-s", "tcbs", "-a", "tcbs"])
     v = ev["V"]
     tcb = lambda i: ev["A"]["tcbs"] + 8 * i
@@ -103,7 +105,51 @@ def t_m5():
     return r.fails
 
 
-TESTS = {"m1": t_m1, "m2": t_m2, "m3": t_m3, "m4": t_m4, "m5": t_m5}
+def runs(seq):
+    """[1,1,2,2,2] -> [(1, 2), (2, 3)]  (value, run length)"""
+    out = []
+    for x in seq:
+        if out and out[-1][0] == x:
+            out[-1][1] += 1
+        else:
+            out.append([x, 1])
+    return [tuple(o) for o in out]
+
+
+def t_m6():
+    r = Report("M6  Round-Robin scheduler, dead tasks, idle")
+    ARGS = ["-v", "11", "-k", "rr_current", "-s", "count", "-a", "tcbs"]
+    tid = lambda ev, p: (p - ev["A"]["tcbs"]) // 8      # TCB address -> task id
+
+    ev = run(build("m5_switch"), ms=400, args=ARGS)
+    seq = runs(tid(ev, kb) for _, _, kb, _ in ev["V"])
+    r.info("who ran during each tick (task id, ticks in a row): " + " ".join(f"T{a}x{n}" for a, n in seq[:7]) + " ...")
+    full = seq[:-1]                                      # last run may be cut off by the end of the test
+    r.check(all(n == SLICE for _, n in full), f"every slice lasted exactly {SLICE} ticks ({len(full)} slices checked)")
+    r.check([a for a, _ in full] == [(i % 3) + 1 for i in range(len(full))], "slices go 1, 2, 3, 1, 2, 3 ... (round robin)")
+
+    ev = run(build("m6_dead"), ms=400, args=ARGS)
+    ids = [tid(ev, kb) for _, _, kb, _ in ev["V"]]
+    c = [int.from_bytes(ev["S"]["count"][2 * i:2 * i + 2], "little") for i in range(3)]
+    r.check(c[1] == 100, f"task 2 ran its 100 loops and returned (count = {c[1]})")
+    last2 = max(i for i, x in enumerate(ids) if x == 2)
+    r.check(last2 < 15 and 2 not in ids[last2 + 1:], f"task 2 is never scheduled again after tick {last2 + 1}")
+    after = runs(ids[last2 + 1:])[:-1]
+    alternating = all(a != b for (a, _), (b, _) in zip(after, after[1:])) and {a for a, _ in after} == {1, 3}
+    r.check(all(n == SLICE for _, n in after) and alternating,
+            "after that tasks 1 and 3 alternate in full slices: " + " ".join(f"T{a}x{n}" for a, n in after[:5]) + " ...")
+
+    ev = run(build("m6_idle"), ms=100, args=ARGS)
+    ids = [tid(ev, kb) for _, _, kb, _ in ev["V"]]
+    r.check(len(ids) >= 98 and ids[10:] == [0] * (len(ids) - 10), f"all tasks returned -> idle task (id 0) runs from tick ~3; ticks keep coming ({len(ids)} in 100 ms)")
+
+    ev = run(build("m6_none"), ms=100, args=ARGS)
+    ids = [tid(ev, kb) for _, _, kb, _ in ev["V"]]
+    r.check(len(ids) >= 98 and set(ids) == {0}, "kernel started with no tasks -> idle only, no crash")
+    return r.fails
+
+
+TESTS = {"m1": t_m1, "m2": t_m2, "m3": t_m3, "m4": t_m4, "m5": t_m5, "m6": t_m6}
 
 if __name__ == "__main__":
     names = [a.lower() for a in sys.argv[1:]] or list(TESTS)

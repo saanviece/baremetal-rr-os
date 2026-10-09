@@ -8,7 +8,9 @@
 #define STACK_SIZE   128    /* bytes of stack per task */
 #define CANARY_LEN   8      /* guard bytes at the bottom of every stack */
 #define STACK_FILL   0xA5   /* pattern the unused stack is filled with (also the canary value) */
-#define SLICE_TICKS  10     /* time slice = this many 1 ms ticks */
+#ifndef SLICE_TICKS
+#define SLICE_TICKS  10     /* time slice = this many 1 ms ticks (override with -DSLICE_TICKS=n) */
+#endif
 
 #define TASK_READY   1      /* may run */
 #define TASK_DEAD    2      /* its function returned; never scheduled again */
@@ -28,5 +30,7 @@ void     kernel_init(void);                   /* call once, before creating task
 tcb_t   *kernel_create(void (*fn)(void));     /* add a task; returns 0 if the table is full */
 void     kernel_start(void) __attribute__((noreturn));  /* start the timer and the first task */
 uint32_t kernel_ticks(void);                  /* milliseconds since kernel_start (atomic read) */
+uint16_t kernel_switches(void);               /* number of task changes so far (atomic read) */
+extern volatile uint8_t kernel_fault;         /* 0 = fine, else (id of the task that overflowed) + 1 */
 
 #endif
