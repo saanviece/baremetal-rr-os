@@ -24,6 +24,8 @@ LDFLAGS = -mmcu=$(MCU) -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(basename $(notdir $
 LIBS_DEFAULT := $(patsubst src/%.c,%,$(filter-out src/main.c,$(wildcard src/*.c)))
 LIBS_m2_uart := uart
 LIBS_m3_tick := uart timer
+LIBS_m4_stack := kernel
+LIBS_m4_launch := kernel
 libobjs = $(patsubst %,$(BUILD)/%.o,$(or $(LIBS_$(1)),$(LIBS_DEFAULT)))
 vpath %.c src tests/fw
 .SECONDEXPANSION:

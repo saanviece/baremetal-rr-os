@@ -54,7 +54,39 @@ def t_m3():
     return r.fails
 
 
-TESTS = {"m1": t_m1, "m2": t_m2, "m3": t_m3}
+def t_m4():
+    r = Report("M4  TCB + fake starting context")
+    elf = build("m4_stack")
+    ev = run(elf, ms=5, args=["-b", "checkpoint", "-s", "tcbs", "-s", "stacks",
+                              "-a", "tcbs", "-a", "stacks", "-a", "task_a", "-a", "task_b", "-a", "task_exit"])
+    tcbs, stacks, A = ev["S"]["tcbs"], ev["S"]["stacks"], ev["A"]
+    T = lambda i: tcbs[i * 8:(i + 1) * 8]            # one TCB = 8 bytes
+    S = lambda i: stacks[i * 128:(i + 1) * 128]
+    for i, fn in ((1, "task_a"), (2, "task_b")):
+        t = T(i); base = A["stacks"] + 128 * i
+        r.check(u16(t, 0) == base + 127 - 37, f"task {i}: saved SP = {u16(t, 0):#06x} = stack top - 37 bytes")
+        r.check(t[2] == 1 and t[3] == i, f"task {i}: state READY, id {t[3]}")
+        r.check(u16(t, 6) == base, f"task {i}: stack_low = {u16(t, 6):#06x} = start of its stack array")
+        st = S(i)
+        ex, en = A["task_exit"] // 2, A[fn] // 2         # AVR function pointers are WORD addresses
+        want = bytes([ex & 255, ex >> 8, en & 255, en >> 8]) + bytes(33)
+        got = bytes(st[127 - 36:128][::-1])
+        r.check(got == want, f"task {i}: top 37 bytes = exit(lo,hi) {ex:#06x}, entry(lo,hi) {en:#06x}, 33 zero bytes (r0,SREG,r1..r31)")
+        r.check(set(st[:90]) == {0xA5}, f"task {i}: 90 unused bytes incl. 8 canary bytes still 0xA5")
+    r.check(u16(T(1), 4) == A["tcbs"] + 16 and u16(T(2), 4) == A["tcbs"] + 8,
+            "circular list: task1.next -> task2, task2.next -> task1")
+
+    r.info("-- now actually start a task through its fake frame --")
+    elf = build("m4_launch")
+    ev = run(elf, ms=5, args=["-s", "tcbs", "-m", "0x3e", "1", "-m", "0x4a", "1", "-p", "B5"])
+    r.check(ev["M"][0x3E][0] == 0x5A, "task body ran (GPIOR0 marker = 0x5A)")
+    r.check(ev["M"][0x4A][0] == 1, "r1 was 0 when the task started (marker = 1)")
+    r.check(any(pin == "B5" for _, pin, _ in ev["P"]), "task toggled PB5")
+    r.check(ev["S"]["tcbs"][8 + 2] == 2, "task returned into task_exit -> state = DEAD")
+    return r.fails
+
+
+TESTS = {"m1": t_m1, "m2": t_m2, "m3": t_m3, "m4": t_m4}
 
 if __name__ == "__main__":
     names = [a.lower() for a in sys.argv[1:]] or list(TESTS)

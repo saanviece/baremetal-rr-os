@@ -36,7 +36,7 @@ def run(elf, ms=100, args=()):
     r = subprocess.run(cmd, env=_env(), capture_output=True, text=True, timeout=600)
     if r.returncode != 0:
         raise RuntimeError("simtest failed:\n" + r.stdout + r.stderr)
-    ev = {"U": [], "P": [], "V": [], "S": {}, "M": {}, "E": None}
+    ev = {"U": [], "P": [], "V": [], "S": {}, "M": {}, "A": {}, "E": None}
     for line in r.stdout.splitlines():
         p = line.split()
         if not p:
@@ -51,6 +51,8 @@ def run(elf, ms=100, args=()):
             ev["S"][p[1]] = bytes.fromhex(p[2]) if p[2] != "MISSING" else None
         elif p[0] == "M":
             ev["M"][int(p[1], 16)] = bytes.fromhex(p[2])
+        elif p[0] == "A":
+            ev["A"][p[1]] = None if p[2] == "MISSING" else int(p[2], 16)
         elif p[0] == "E":
             ev["E"] = dict(cycle=int(p[1]), pc=int(p[2]), sp=int(p[3]), state=int(p[4]))
     return ev

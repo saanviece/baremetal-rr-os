@@ -15,6 +15,7 @@
  *                                  kb/ka = 16-bit watched variable before/after
  *   S <name> <hex bytes>           memory dump of a symbol at the end
  *   M <addr> <hex bytes>           raw memory dump at the end
+ *   A <name> <addr>                address of a symbol (function = flash BYTE address)
  *   E <cycle> <pc> <sp> <state>    final state
  */
 #include <stdio.h>
@@ -71,6 +72,7 @@ int main(int argc, char **argv)
     const char *watch_sym = NULL;                        /* -k sym: 16-bit var to sample */
     const char *stop_sym = NULL;                         /* -b sym: stop at this function */
     const char *dump_syms[16]; int ndump = 0;
+    const char *addr_syms[16]; int naddr = 0;
     unsigned dump_raw[8][2]; int nraw = 0;
     pin_t pins[16]; int npins = 0;
     int want_uart = 0;
@@ -86,6 +88,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-k") && i + 1 < argc) watch_sym = argv[++i];
         else if (!strcmp(argv[i], "-b") && i + 1 < argc) stop_sym = argv[++i];
         else if (!strcmp(argv[i], "-s") && i + 1 < argc && ndump < 16) dump_syms[ndump++] = argv[++i];
+        else if (!strcmp(argv[i], "-a") && i + 1 < argc && naddr < 16) addr_syms[naddr++] = argv[++i];
         else if (!strcmp(argv[i], "-m") && i + 2 < argc && nraw < 8) {
             dump_raw[nraw][0] = strtoul(argv[i + 1], 0, 0); dump_raw[nraw][1] = strtoul(argv[i + 2], 0, 0);
             nraw++; i += 2;
@@ -93,7 +96,7 @@ int main(int argc, char **argv)
         else if (argv[i][0] != '-') file = argv[i];
         else { fprintf(stderr, "unknown option %s\n", argv[i]); return 2; }
     }
-    if (!file) { fprintf(stderr, "usage: simtest file.elf [-ms N|-c N] [-u] [-p B5].. [-v N -k sym] [-b func] [-s sym].. [-m addr len]..\n"); return 2; }
+    if (!file) { fprintf(stderr, "usage: simtest file.elf [-ms N|-c N] [-u] [-p B5].. [-v N -k sym] [-b func] [-s sym].. [-a sym].. [-m addr len]..\n"); return 2; }
 
     static elf_firmware_t f;
     memset(&f, 0, sizeof f);
@@ -139,6 +142,11 @@ int main(int argc, char **argv)
         uint32_t a, s;
         if (!find_sym(&f, dump_syms[i], &a, &s)) { printf("S %s MISSING\n", dump_syms[i]); continue; }
         printf("S %s ", dump_syms[i]); dump(a & 0xFFFF, s);
+    }
+    for (int i = 0; i < naddr; i++) {
+        uint32_t a, s;
+        if (find_sym(&f, addr_syms[i], &a, &s)) printf("A %s 0x%x\n", addr_syms[i], a & 0xFFFF);
+        else printf("A %s MISSING\n", addr_syms[i]);
     }
     for (int i = 0; i < nraw; i++) { printf("M 0x%x ", dump_raw[i][0]); dump(dump_raw[i][0], dump_raw[i][1]); }
     printf("E %llu %u %u %d\n", (unsigned long long)avr->cycle, avr->pc,
