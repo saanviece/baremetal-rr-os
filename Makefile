@@ -22,9 +22,10 @@ LDFLAGS = -mmcu=$(MCU) -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(basename $(notdir $
 # Library modules in src/ (everything except main.c). The real program links all of them;
 # an early-milestone test links only what it needs, listed in LIBS_<testname> below.
 LIBS_DEFAULT := $(patsubst src/%.c,%,$(filter-out src/main.c,$(wildcard src/*.c)))
+LIBS_m1_blink := -
 LIBS_m2_uart := uart
 LIBS_m3_tick := uart timer
-libobjs = $(patsubst %,$(BUILD)/%.o,$(or $(LIBS_$(1)),$(LIBS_DEFAULT)))
+libobjs = $(patsubst %,$(BUILD)/%.o,$(filter-out -,$(or $(LIBS_$(1)),$(LIBS_DEFAULT))))
 vpath %.c src tests/fw
 .SECONDEXPANSION:
 

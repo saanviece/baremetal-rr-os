@@ -8,7 +8,7 @@ SLICE = 10          # SLICE_TICKS default
 
 def t_m1():
     r = Report("M1  LED blink on PB5 (direct register writes)")
-    elf = build("main")
+    elf = build("m1_blink")
     ev = run(elf, ms=2000, args=["-p", "B5"])
     t = [c for c, pin, v in ev["P"] if pin == "B5"]
     r.check(len(t) >= 4, f"PB5 changed level {len(t)} times in 2000 ms")
@@ -149,7 +149,37 @@ def t_m6():
     return r.fails
 
 
-TESTS = {"m1": t_m1, "m2": t_m2, "m3": t_m3, "m4": t_m4, "m5": t_m5, "m6": t_m6}
+def stack_use(stacks, i):
+    """Bytes of stack task i has ever used (0xA5 fill pattern high-water mark) and whether its canary is intact."""
+    st = stacks[i * 128:(i + 1) * 128]
+    first_used = next((k for k, b in enumerate(st) if b != 0xA5), 128)
+    return 128 - first_used, set(st[:8]) == {0xA5}
+
+
+def t_m7():
+    r = Report("M7  demo: 3 tasks, 3 LEDs, UART rotation (main.elf, 5 s)")
+    ev = run(build("main"), ms=5000, args=["-u", "-p", "B5", "-p", "B0", "-p", "B1", "-s", "kernel_fault", "-s", "stacks"])
+    text = bytes(b for _, b in ev["U"]).decode()
+    banner = "RR-OS: 3 tasks, 10 ms slice\r\n"
+    r.check(text.startswith(banner), f"banner printed first: {banner.strip()!r}")
+    lines = text[len(banner):].split("\r\n")[:-1]
+    r.info("UART after the banner: " + " ".join(lines[:9]) + " ...")
+    r.check(len(lines) >= 45, f"{len(lines)} lines in 5 s")
+    r.check(lines == [f"T{i % 3 + 1}" for i in range(len(lines))], "lines are exactly T1 T2 T3 T1 T2 T3 ... : strict rotation, no garbled line")
+    for pin, half in (("B5", 250), ("B0", 500), ("B1", 1000)):
+        t = [c for c, p, v in ev["P"] if p == pin]
+        gaps = [(b - a) / 16000 for a, b in zip(t, t[1:])]
+        mean = (t[-1] - t[0]) / (len(t) - 1) / 16000
+        r.check(abs(mean - half) < half * 0.01 and max(abs(g - half) for g in gaps) <= 25,
+                f"{pin}: {len(t)} toggles, mean {mean:.1f} ms (want {half}), worst single gap off by {max(abs(g - half) for g in gaps):.1f} ms")
+    r.check(ev["S"]["kernel_fault"] == b"\x00", "no stack fault reported")
+    for i in (1, 2, 3, 0):
+        used, ok = stack_use(ev["S"]["stacks"], i)
+        r.check(ok and used < 128 - 8 - 16, f"{'task ' + str(i) if i else 'idle'}: used {used} of 128 stack bytes at most, canary intact")
+    return r.fails
+
+
+TESTS = {"m1": t_m1, "m2": t_m2, "m3": t_m3, "m4": t_m4, "m5": t_m5, "m6": t_m6, "m7": t_m7}
 
 if __name__ == "__main__":
     names = [a.lower() for a in sys.argv[1:]] or list(TESTS)
