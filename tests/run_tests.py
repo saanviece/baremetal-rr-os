@@ -33,7 +33,28 @@ def t_m2():
     return r.fails
 
 
-TESTS = {"m1": t_m1, "m2": t_m2}
+def t_m3():
+    r = Report("M3  Timer1 1 ms tick interrupt")
+    elf = build("m3_tick")
+    ev = run(elf, ms=1100, args=["-v", "11", "-k", "ticks", "-p", "B5", "-s", "ticks"])
+    v = ev["V"]
+    r.check(1098 <= len(v) <= 1100, f"tick interrupt ran {len(v)} times in 1100 ms")
+    gaps = [b[0] - a[0] for a, b in zip(v, v[1:])]
+    mean = (v[-1][0] - v[0][0]) / (len(v) - 1)
+    r.check(abs(mean - 16000) < 0.05, f"average tick period over {len(v)} ticks = {mean:.3f} cycles (16000 = exactly 1.000 ms)")
+    r.check(max(gaps) - min(gaps) <= 24, f"entry jitter = {min(gaps)}..{max(gaps)} cycles (CPU finishes its current instruction first)")
+    ticks = int.from_bytes(ev["S"]["ticks"], "little")
+    r.check(ticks == len(v), f"ticks variable in SRAM = {ticks}, matches interrupt count")
+    r.check(all(after == before + 1 for _, _, before, after in v), "ticks went up by exactly 1 in every interrupt")
+    dur = {b - a for a, b, _, _ in v}
+    r.info(f"ISR duration (first vector instruction to end of reti): {sorted(dur)} cycles")
+    p = [c for c, pin, val in ev["P"] if pin == "B5"]
+    r.check(len(p) == 2, f"PB5 toggled {len(p)} times in 1.1 s (every 500 ticks)")
+    r.info(f"PB5 toggle gap = {(p[1] - p[0]) / 16000:.2f} ms")
+    return r.fails
+
+
+TESTS = {"m1": t_m1, "m2": t_m2, "m3": t_m3}
 
 if __name__ == "__main__":
     names = [a.lower() for a in sys.argv[1:]] or list(TESTS)

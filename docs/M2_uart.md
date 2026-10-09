@@ -28,5 +28,7 @@ one stays for start-up messages and for the crash handler.
 
 ## How M2 is tested
 Run in simavr, capture each byte that leaves the UART with its cycle number, and check
-(a) the text is exactly what I sent, (b) the bytes are spaced about 10 bit-times apart
-(16 667 cycles at 9600 baud with UBRR = 103 -> 104 x 16 x 10 = 16 640 cycles).
+(a) the text is exactly what I sent, (b) the bit time is (UBRR + 1) x 16 = 1664 CPU cycles.
+Honest detail: simavr's UART model always counts a parity slot, so it spaces characters 11 bits apart
+(18 304 cycles) instead of the 10 bits (16 640 cycles) real 8N1 hardware uses. So the test checks the
+*bit time*, which my UBRR value controls, and not the per-character time.

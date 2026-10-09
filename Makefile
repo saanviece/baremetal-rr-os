@@ -19,10 +19,14 @@ CFLAGS  := -mmcu=$(MCU) -DF_CPU=$(F_CPU) -Os -std=gnu11 -Wall -Wextra \
            -ffunction-sections -fdata-sections -Isrc $(EXTRA_CFLAGS)
 LDFLAGS = -mmcu=$(MCU) -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(basename $(notdir $@)).map
 
-# Everything in src/ except main.c is "the kernel library"; tests link against it too.
-LIB_SRCS := $(filter-out src/main.c,$(wildcard src/*.c))
-LIB_OBJS := $(patsubst src/%.c,$(BUILD)/%.o,$(LIB_SRCS))
+# Library modules in src/ (everything except main.c). The real program links all of them;
+# an early-milestone test links only what it needs, listed in LIBS_<testname> below.
+LIBS_DEFAULT := $(patsubst src/%.c,%,$(filter-out src/main.c,$(wildcard src/*.c)))
+LIBS_m2_uart := uart
+LIBS_m3_tick := uart timer
+libobjs = $(patsubst %,$(BUILD)/%.o,$(or $(LIBS_$(1)),$(LIBS_DEFAULT)))
 vpath %.c src tests/fw
+.SECONDEXPANSION:
 
 .PHONY: all flash disasm test clean size
 all: $(BUILD)/main.hex size
@@ -33,11 +37,9 @@ $(BUILD):
 $(BUILD)/%.o: %.c $(wildcard src/*.h) | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/main.elf: $(BUILD)/main.o $(LIB_OBJS)
-	$(CC) $(LDFLAGS) $^ -o $@
-
-# Test firmware: tests/fw/<name>.c plus the kernel library, built as build/<name>.elf
-$(BUILD)/%.elf: $(BUILD)/%.o $(LIB_OBJS)
+# build/<name>.elf = <name>.o + its library modules. main uses src/main.c; any other
+# name is a test firmware tests/fw/<name>.c
+$(BUILD)/%.elf: $(BUILD)/%.o $$(call libobjs,$$*)
 	$(CC) $(LDFLAGS) $^ -o $@
 
 $(BUILD)/%.hex: $(BUILD)/%.elf
