@@ -18,7 +18,22 @@ def t_m1():
     return r.fails
 
 
-TESTS = {"m1": t_m1}
+def t_m2():
+    r = Report("M2  UART transmit in registers")
+    elf = build("m2_uart")
+    ev = run(elf, ms=30, args=["-u"])
+    text = bytes(b for _, b in ev["U"]).decode()
+    r.check(text == "Hello, UART\r\n", f"bytes received = {text!r}")
+    gaps = [b[0] - a[0] for a, b in zip(ev["U"], ev["U"][1:])]
+    bit = gaps[0] / 11          # simavr always counts 11 bits per character (it includes a parity slot)
+    r.info(f"cycles between bytes = {gaps[0]}; simavr counts 11 bits/char, so one bit = {bit:.0f} cycles")
+    r.check(all(abs(g - 11 * 104 * 16) <= 8 for g in gaps),
+            "bit time = (UBRR+1) x 16 = 104 x 16 = 1664 cycles (+-8 cycles polling jitter) -> 9615 baud, +0.16 % vs 9600")
+    r.info("note: real 8N1 hardware sends 10 bits/char = 16640 cycles/char; simavr's 11-bit model is ~10 % slower")
+    return r.fails
+
+
+TESTS = {"m1": t_m1, "m2": t_m2}
 
 if __name__ == "__main__":
     names = [a.lower() for a in sys.argv[1:]] or list(TESTS)
