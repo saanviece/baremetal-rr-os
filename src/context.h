@@ -13,6 +13,31 @@
 #ifndef CONTEXT_H
 #define CONTEXT_H
 
+/* Freeze the running task: push r0, SREG, r1, r2..r31 (the hardware already pushed the PC). */
+#define SAVE_CONTEXT \
+    "push r0                    \n\t"  /* r0 is my scratch register: save it first      */ \
+    "in   r0, __SREG__          \n\t"  /* copy the flags (SREG) into r0                 */ \
+    "push r0                    \n\t"  /* save the flags                                */ \
+    "push r1                    \n\t"  /* save r1 ...                                   */ \
+    "clr  r1                    \n\t"  /* ... then make r1 = 0 again: C code needs that */ \
+    "push r2  \n\t push r3  \n\t push r4  \n\t push r5  \n\t" \
+    "push r6  \n\t push r7  \n\t push r8  \n\t push r9  \n\t" \
+    "push r10 \n\t push r11 \n\t push r12 \n\t push r13 \n\t" \
+    "push r14 \n\t push r15 \n\t push r16 \n\t push r17 \n\t" \
+    "push r18 \n\t push r19 \n\t push r20 \n\t push r21 \n\t" \
+    "push r22 \n\t push r23 \n\t push r24 \n\t push r25 \n\t" \
+    "push r26 \n\t push r27 \n\t push r28 \n\t push r29 \n\t" \
+    "push r30 \n\t push r31 \n\t"
+
+/* Remember where this task's stack ended: tcb->sp := SP. Uses Z (already saved), r24, r25. */
+#define SAVE_SP_TO_CURRENT \
+    "lds  r30, rr_current       \n\t"  /* Z = address of the running task's TCB */ \
+    "lds  r31, rr_current+1     \n\t" \
+    "in   r24, __SP_L__         \n\t"  /* read the stack pointer                */ \
+    "in   r25, __SP_H__         \n\t" \
+    "st   Z, r24                \n\t"  /* tcb->sp low                           */ \
+    "std  Z+1, r25              \n\t"  /* tcb->sp high                          */
+
 /* Load SP from the TCB that rr_current points to (TCB offset 0 = saved sp). Uses Z, r24, r25. */
 #define LOAD_SP_FROM_CURRENT \
     "lds  r30, rr_current       \n\t"  /* Z = rr_current (low byte)          */ \

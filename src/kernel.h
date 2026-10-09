@@ -26,5 +26,7 @@ extern tcb_t *volatile rr_current;   /* the task that owns the CPU now */
 
 void     kernel_init(void);                   /* call once, before creating tasks */
 tcb_t   *kernel_create(void (*fn)(void));     /* add a task; returns 0 if the table is full */
+void     kernel_start(void) __attribute__((noreturn));  /* start the timer and the first task */
+uint32_t kernel_ticks(void);                  /* milliseconds since kernel_start (atomic read) */
 
 #endif

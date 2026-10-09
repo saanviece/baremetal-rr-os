@@ -1,4 +1,2 @@
-*.sh text eol=lf
-*.c text eol=lf
-*.h text eol=lf
-Makefile text eol=lf
+* text=auto eol=lf
+*.png binary

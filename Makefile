@@ -26,6 +26,7 @@ LIBS_m2_uart := uart
 LIBS_m3_tick := uart timer
 LIBS_m4_stack := kernel
 LIBS_m4_launch := kernel
+LIBS_m5_switch := kernel timer
 libobjs = $(patsubst %,$(BUILD)/%.o,$(or $(LIBS_$(1)),$(LIBS_DEFAULT)))
 vpath %.c src tests/fw
 .SECONDEXPANSION:

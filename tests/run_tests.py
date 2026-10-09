@@ -86,7 +86,24 @@ def t_m4():
     return r.fails
 
 
-TESTS = {"m1": t_m1, "m2": t_m2, "m3": t_m3, "m4": t_m4}
+def t_m5():
+    r = Report("M5  context switch (naked ISR) - switch on every tick")
+    elf = build("m5_switch")
+    ev = run(elf, ms=200, args=["-v", "11", "-k", "rr_current", "-s", "count", "-s", "tcbs", "-a", "tcbs"])
+    v = ev["V"]
+    tcb = lambda i: ev["A"]["tcbs"] + 8 * i
+    nxt = {tcb(1): tcb(2), tcb(2): tcb(3), tcb(3): tcb(1)}
+    r.check(len(v) >= 195, f"{len(v)} tick interrupts in 200 ms")
+    r.check(v[0][2] == tcb(1), f"first task running is task 1 (rr_current = {v[0][2]:#06x})")
+    r.check(all(nxt[b] == a for _, _, b, a in v), "every interrupt switched to the next TCB in the ring: 1 -> 2 -> 3 -> 1 ...")
+    c = [int.from_bytes(ev["S"]["count"][2 * i:2 * i + 2], "little") for i in range(3)]
+    r.check(all(x > 0 for x in c), f"all three tasks made progress: counters = {c}")
+    cost = sorted({b - a for a, b, _, _ in v})
+    r.info(f"ISR cost, vector jmp to end of reti: {cost} cycles = {cost[-1] / 16:.1f} us ({cost[-1] / 16000 * 100:.2f} % of one 1 ms tick)")
+    return r.fails
+
+
+TESTS = {"m1": t_m1, "m2": t_m2, "m3": t_m3, "m4": t_m4, "m5": t_m5}
 
 if __name__ == "__main__":
     names = [a.lower() for a in sys.argv[1:]] or list(TESTS)
