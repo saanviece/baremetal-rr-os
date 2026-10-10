@@ -20,7 +20,7 @@
 | avr-libc | missing | comes inside the package above | 2.3.2 |
 | make | missing | comes inside the package above | GNU Make 4.2.1 |
 | avrdude | missing | comes inside the package above | 8.2 |
-| simavr | missing, **no Windows package exists** | built from source with MSYS2 (see `tools/build_simavr.sh`) | git commit `d6aed53` |
+| simavr | missing, **no Windows package exists** | built from source with MSYS2 (see `tools/build_simavr.sh`). Gotcha found on the way: without `pkgconf` installed simavr builds *silently without ELF support* ("ELF format is not supported by this build") | git commit `d6aed53` |
 | python 3 | present | used only to run my test scripts | 3.13 |
 
 simavr **was** installed (built), so simulation tests are possible.
