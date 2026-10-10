@@ -1,0 +1,100 @@
+
+=== M1  LED blink on PB5 (direct register writes) ===
+  PASS  PB5 changed level 5 times in 2000 ms
+  PASS  every toggle gap identical: [7980023] cycles
+  info  toggle gap = 7980023 cycles = 498.75 ms
+  PASS  blink half-period is about 500 ms (bring-up delay loop, not exact)
+
+=== M2  UART transmit in registers ===
+  PASS  bytes received = 'Hello, UART\r\n'
+  info  cycles between bytes = 18308; simavr counts 11 bits/char, so one bit = 1664 cycles
+  PASS  bit time = (UBRR+1) x 16 = 104 x 16 = 1664 cycles (+-8 cycles polling jitter) -> 9615 baud, +0.16 % vs 9600
+  info  note: real 8N1 hardware sends 10 bits/char = 16640 cycles/char; simavr's 11-bit model is ~10 % slower
+
+=== M3  Timer1 1 ms tick interrupt ===
+  PASS  tick interrupt ran 1099 times in 1100 ms
+  PASS  average tick period over 1099 ticks = 15999.996 cycles (16000 = exactly 1.000 ms)
+  PASS  entry jitter = 15993..16010 cycles (CPU finishes its current instruction first)
+  PASS  ticks variable in SRAM = 1099, matches interrupt count
+  PASS  ticks went up by exactly 1 in every interrupt
+  info  ISR duration (first vector instruction to end of reti): [54] cycles
+  PASS  PB5 toggled 2 times in 1.1 s (every 500 ticks)
+  info  PB5 toggle gap = 500.00 ms
+
+=== M4  TCB + fake starting context ===
+  PASS  task 1: saved SP = 0x01fc = stack top - 37 bytes
+  PASS  task 1: state READY, id 1
+  PASS  task 1: stack_low = 0x01a2 = start of its stack array
+  PASS  task 1: top 37 bytes = exit(lo,hi) 0x0064, entry(lo,hi) 0x0053, 33 zero bytes (r0,SREG,r1..r31)
+  PASS  task 1: 90 unused bytes incl. 8 canary bytes still 0xA5
+  PASS  task 2: saved SP = 0x027c = stack top - 37 bytes
+  PASS  task 2: state READY, id 2
+  PASS  task 2: stack_low = 0x0222 = start of its stack array
+  PASS  task 2: top 37 bytes = exit(lo,hi) 0x0064, entry(lo,hi) 0x0054, 33 zero bytes (r0,SREG,r1..r31)
+  PASS  task 2: 90 unused bytes incl. 8 canary bytes still 0xA5
+  PASS  circular list: task1.next -> task2, task2.next -> task1
+  info  -- now actually start a task through its fake frame --
+  PASS  task body ran (GPIOR0 marker = 0x5A)
+  PASS  r1 was 0 when the task started (marker = 1)
+  PASS  task toggled PB5
+  PASS  task returned into task_exit -> state = DEAD
+
+=== M5  context switch (naked ISR) - switch on every tick ===
+  PASS  199 tick interrupts in 200 ms
+  PASS  first task running is task 1 (rr_current = 0x03b0)
+  PASS  every interrupt switched to the next TCB in the ring: 1 -> 2 -> 3 -> 1 ...
+  PASS  all three tasks made progress: counters = [21744, 20981, 20418]
+  info  ISR cost, vector jmp to end of reti: [372] cycles = 23.2 us (2.33 % of one 1 ms tick)
+
+=== M6  Round-Robin scheduler, dead tasks, idle ===
+  info  who ran during each tick (task id, ticks in a row): T1x10 T2x10 T3x10 T1x10 T2x10 T3x10 T1x10 ...
+  PASS  every slice lasted exactly 10 ticks (39 slices checked)
+  PASS  slices go 1, 2, 3, 1, 2, 3 ... (round robin)
+  PASS  task 2 ran its 100 loops and returned (count = 100)
+  PASS  task 2 is never scheduled again after tick 11
+  PASS  after that tasks 1 and 3 alternate in full slices: T3x10 T1x10 T3x10 T1x10 T3x10 ...
+  PASS  all tasks returned -> idle task (id 0) runs from tick ~3; ticks keep coming (99 in 100 ms)
+  PASS  kernel started with no tasks -> idle only, no crash
+
+=== M7  demo: 3 tasks, 3 LEDs, UART rotation (main.elf, 5 s) ===
+  PASS  banner printed first: 'RR-OS: 3 tasks, 10 ms slice'
+  info  UART after the banner: T1 T2 T3 T1 T2 T3 T1 T2 T3 ...
+  PASS  48 lines in 5 s
+  PASS  lines are exactly T1 T2 T3 T1 T2 T3 ... : strict rotation, no garbled line
+  PASS  B5: 19 toggles, mean 250.0 ms (want 250), worst single gap off by 20.0 ms
+  PASS  B0: 9 toggles, mean 498.8 ms (want 500), worst single gap off by 20.0 ms
+  PASS  B1: 4 toggles, mean 1000.0 ms (want 1000), worst single gap off by 20.0 ms
+  PASS  no stack fault reported
+  PASS  task 1: used 49 of 128 stack bytes at most, canary intact
+  PASS  task 2: used 49 of 128 stack bytes at most, canary intact
+  PASS  task 3: used 49 of 128 stack bytes at most, canary intact
+  PASS  idle: used 37 of 128 stack bytes at most, canary intact
+
+=== M8  measurements and stress tests ===
+  info  -- 1. registers r0-r31 and flags C,T survive switches (3 assembly tasks, mirror-pair checksums) --
+  PASS  switch every tick (SLICE_TICKS=1): 1999 real task switches in 2000 ms, GPIOR0 fail flags = 0x00, checksum passes (heartbeats) per task = {'B5': 5286, 'B0': 8481, 'B1': 6793}
+  PASS  default 10-tick slices: 299 real task switches in 3000 ms, GPIOR0 fail flags = 0x00, checksum passes (heartbeats) per task = {'B5': 7943, 'B0': 12756, 'B1': 10219}
+  info  -- negative controls: break the kernel on purpose, the same test must now FAIL --
+  PASS  ISR corrupts r7 after every restore: test detects it (GPIOR0 fail flags = 0x07)
+  PASS  ISR clears the carry flag after every restore: test detects it (GPIOR0 fail flags = 0x07)
+  info  -- 2. tick period with the scheduler running (main.elf, 3 tasks) --
+  PASS  average tick period = 16000.001 cycles = 1.00000 ms over 1967 ticks
+  PASS  `ticks` in SRAM = 1967 = number of tick interrupts seen
+  info  -- 3. interrupt cost: vector jmp to end of reti (hardware entry adds 4 cycles more) --
+  PASS  196 switching ticks, 1771 non-switching ticks observed
+  info  tick WITHOUT task change: 331..331 cycles (20.7 us)
+  info  tick WITH task change   : 372..372 cycles (23.2 us)  [+4 hardware entry]
+  info  overhead of the kernel: 2.09 % of CPU time (10 ticks = 160000 cycles per slice)
+  PASS  switch costs less than 400 cycles = 25 us
+  info  -- 4. stack canary: deliberate overflow of task 2 --
+  PASS  UART says: '!STACK OVERFLOW T2'
+  PASS  kernel_fault = 3 (= task id 2 + 1)
+  PASS  last completed tick handed the CPU to task 2 (tick 10); the very next tick found the canary smashed and halted the system
+  PASS  detection latency = 15802 cycles = 0.99 ms after task 2 got the CPU (at most one tick)
+  PASS  no more ticks completed after the panic: kernel stopped (interrupts off)
+  info  canary bytes of task 2 after overflow: 0101010101010101 (was a5a5a5a5a5a5a5a5)
+  PASS  the canary really was overwritten
+  info  task 1 canary intact: True (task 2's overflow ran downward into task 1's stack top, which is stale)
+  PASS  control: same program recursing only 2 calls deep (~60 bytes) -> no false alarm
+
+RESULT: ALL PASSED

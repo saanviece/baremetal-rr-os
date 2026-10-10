@@ -8,6 +8,7 @@
 
 void uart_init(void)
 {
+    UCSR0A = 0;                               /* normal speed (U2X0 = 0), as the UBRR formula assumes */
     UBRR0  = UBRR_VAL;                        /* baud-rate divider */
     UCSR0B = (1 << TXEN0);                    /* turn the transmitter on */
     UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);   /* 8 data bits, no parity, 1 stop bit */

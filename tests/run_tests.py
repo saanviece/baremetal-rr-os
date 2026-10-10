@@ -179,7 +179,69 @@ def t_m7():
     return r.fails
 
 
-TESTS = {"m1": t_m1, "m2": t_m2, "m3": t_m3, "m4": t_m4, "m5": t_m5, "m6": t_m6, "m7": t_m7}
+def t_m8():
+    r = Report("M8  measurements and stress tests")
+    base = ["-v", "11", "-k", "rr_current", "-m", "0x3e", "1", "-p", "B5", "-p", "B0", "-p", "B1", "-s", "stacks", "-s", "ticks"]
+
+    # ---- 1. registers + flags survive context switches --------------------------------------------------------
+    r.info("-- 1. registers r0-r31 and flags C,T survive switches (3 assembly tasks, mirror-pair checksums) --")
+    for label, flags, ms in (("switch every tick (SLICE_TICKS=1)", "-DSLICE_TICKS=1", 2000), ("default 10-tick slices", "", 3000)):
+        ev = run(build("m8_regs", flags), ms=ms, args=base)
+        sw = sum(1 for _, _, kb, ka in ev["V"] if kb != ka)
+        hb = {p: sum(1 for _, q, _ in ev["P"] if q == p) for p in ("B5", "B0", "B1")}
+        r.check(ev["M"][0x3E][0] == 0 and min(hb.values()) > 1000,
+                f"{label}: {sw} real task switches in {ms} ms, GPIOR0 fail flags = {ev['M'][0x3E][0]:#04x}, "
+                f"checksum passes (heartbeats) per task = {hb}")
+    r.info("-- negative controls: break the kernel on purpose, the same test must now FAIL --")
+    for flag, what in (("-DFAULT_R7", "ISR corrupts r7 after every restore"), ("-DFAULT_CARRY", "ISR clears the carry flag after every restore")):
+        ev = run(build("m8_regs", "-DSLICE_TICKS=1 " + flag), ms=500, args=base)
+        g = ev["M"][0x3E][0]
+        r.check(g != 0, f"{what}: test detects it (GPIOR0 fail flags = {g:#04x})")
+
+    # ---- 2. tick period with the full kernel running ----------------------------------------------------------
+    r.info("-- 2. tick period with the scheduler running (main.elf, 3 tasks) --")
+    ev = run(build("main"), ms=2000, args=["-v", "11", "-k", "rr_current", "-s", "ticks"])
+    v = ev["V"]
+    mean = (v[-1][0] - v[0][0]) / (len(v) - 1)
+    ticks = int.from_bytes(ev["S"]["ticks"], "little")
+    r.check(abs(mean - 16000) < 0.1, f"average tick period = {mean:.3f} cycles = {mean / 16000:.5f} ms over {len(v)} ticks")
+    r.check(ticks == len(v), f"`ticks` in SRAM = {ticks} = number of tick interrupts seen")
+
+    # ---- 3. context-switch cost -------------------------------------------------------------------------------
+    r.info("-- 3. interrupt cost: vector jmp to end of reti (hardware entry adds 4 cycles more) --")
+    sw = [b - a for a, b, kb, ka in v if kb != ka]
+    st = [b - a for a, b, kb, ka in v if kb == ka]
+    r.check(len(sw) > 0 and len(st) > 0, f"{len(sw)} switching ticks, {len(st)} non-switching ticks observed")
+    r.info(f"tick WITHOUT task change: {min(st)}..{max(st)} cycles ({max(st) / 16:.1f} us)")
+    r.info(f"tick WITH task change   : {min(sw)}..{max(sw)} cycles ({max(sw) / 16:.1f} us)  [+4 hardware entry]")
+    per_slice = sum(st) / len(st) * 9 + sum(sw) / len(sw)
+    r.info(f"overhead of the kernel: {per_slice / 160000 * 100:.2f} % of CPU time (10 ticks = 160000 cycles per slice)")
+    r.check(max(sw) < 400, "switch costs less than 400 cycles = 25 us")
+
+    # ---- 4. stack use and the deliberate overflow -------------------------------------------------------------
+    r.info("-- 4. stack canary: deliberate overflow of task 2 --")
+    ev = run(build("m8_overflow"), ms=200, args=["-u", "-v", "11", "-k", "rr_current", "-s", "kernel_fault",
+                                                  "-s", "stacks", "-a", "tcbs"])
+    text = bytes(b for _, b in ev["U"]).decode()
+    r.check("!STACK OVERFLOW T2" in text, f"UART says: {text.strip()!r}")
+    r.check(ev["S"]["kernel_fault"] == b"\x03", "kernel_fault = 3 (= task id 2 + 1)")
+    v = ev["V"]
+    to_task2 = (v[-1][3] - ev["A"]["tcbs"]) // 8
+    lat = ev["U"][0][0] - v[-1][1]
+    r.check(to_task2 == 2, f"last completed tick handed the CPU to task 2 (tick {len(v)}); the very next tick found the canary smashed and halted the system")
+    r.check(lat < 16000 + 2000, f"detection latency = {lat} cycles = {lat / 16000:.2f} ms after task 2 got the CPU (at most one tick)")
+    r.check(len(ev["V"]) == 10, "no more ticks completed after the panic: kernel stopped (interrupts off)")
+    st2 = ev["S"]["stacks"][2 * 128:3 * 128]
+    r.info(f"canary bytes of task 2 after overflow: {st2[:8].hex()} (was a5a5a5a5a5a5a5a5)")
+    r.check(set(st2[:8]) != {0xA5}, "the canary really was overwritten")
+    _, ok1 = stack_use(ev["S"]["stacks"], 1)
+    r.info(f"task 1 canary intact: {ok1} (task 2's overflow ran downward into task 1's stack top, which is stale)")
+    ev = run(build("m8_overflow", "-DLEVELS=1"), ms=200, args=["-u", "-s", "kernel_fault"])
+    r.check(ev["U"] == [] and ev["S"]["kernel_fault"] == b"\x00", "control: same program recursing only 2 calls deep (~60 bytes) -> no false alarm")
+    return r.fails
+
+
+TESTS = {"m1": t_m1, "m2": t_m2, "m3": t_m3, "m4": t_m4, "m5": t_m5, "m6": t_m6, "m7": t_m7, "m8": t_m8}
 
 if __name__ == "__main__":
     names = [a.lower() for a in sys.argv[1:]] or list(TESTS)

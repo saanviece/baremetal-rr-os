@@ -142,6 +142,18 @@ __attribute__((used)) void kernel_tick(void)
 }
 
 /*
+ * Test-only: deliberately break the context switch, to prove that the register test in
+ * tests/fw/m8_regs.c is able to FAIL. Both are off in normal builds.
+ */
+#if defined(FAULT_R7)
+#define FAULT_INJECT "inc r7 \n\t"   /* corrupts r7 of every task that is resumed   */
+#elif defined(FAULT_CARRY)
+#define FAULT_INJECT "clc \n\t"      /* clears the carry flag of every resumed task */
+#else
+#define FAULT_INJECT ""
+#endif
+
+/*
  * Timer1 compare-A interrupt = the 1 ms tick = the context switch.
  * ISR_NAKED: the compiler adds nothing; every instruction here is mine (see docs/M5_context_switch.md).
  */
@@ -153,6 +165,7 @@ ISR(TIMER1_COMPA_vect, ISR_NAKED)
         "call kernel_tick       \n\t"           /* C code decides who runs next           */
         LOAD_SP_FROM_CURRENT                    /* SP := new task's tcb->sp  (the switch) */
         RESTORE_CONTEXT                         /* thaw the new task                      */
+        FAULT_INJECT
         "reti                   \n\t"           /* pop PC, set I-bit: new task continues  */
     );
 }
