@@ -31,6 +31,11 @@ make disasm     # build/main.lst : assembly listing
 make clean
 ```
 
+## Just run it (no board)
+```bash
+python tools/run_demo.py 6      # runs the OS for 6 simulated seconds and prints serial text + LED changes
+```
+
 ## Flash to the UNO
 Find the port (Windows Device Manager -> Ports, e.g. COM3; Linux `/dev/ttyACM0`) and run:
 ```bash
