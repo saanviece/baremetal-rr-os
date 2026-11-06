@@ -17,6 +17,10 @@
  *   M <addr> <hex bytes>           raw memory dump at the end
  *   A <name> <addr>                address of a symbol (function = flash BYTE address)
  *   E <cycle> <pc> <sp> <state>    final state
+ *
+ * Input: -r <ms> <byte> sends one byte to the firmware's UART receiver at that time
+ * (like the dashboard sending 'T'). simavr's own echo of UART text is switched off,
+ * so stdout holds only the records above.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -76,6 +80,7 @@ int main(int argc, char **argv)
     unsigned dump_raw[8][2]; int nraw = 0;
     pin_t pins[16]; int npins = 0;
     int want_uart = 0;
+    unsigned long long rx_at[8]; unsigned rx_byte[8]; int nrx = 0, rx_next = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-c") && i + 1 < argc) max_cycles = strtoull(argv[++i], 0, 0);
@@ -93,10 +98,14 @@ int main(int argc, char **argv)
             dump_raw[nraw][0] = strtoul(argv[i + 1], 0, 0); dump_raw[nraw][1] = strtoul(argv[i + 2], 0, 0);
             nraw++; i += 2;
         }
+        else if (!strcmp(argv[i], "-r") && i + 2 < argc && nrx < 8) {
+            rx_at[nrx] = strtoull(argv[i + 1], 0, 0) * 16000ULL; rx_byte[nrx] = strtoul(argv[i + 2], 0, 0);
+            nrx++; i += 2;
+        }
         else if (argv[i][0] != '-') file = argv[i];
         else { fprintf(stderr, "unknown option %s\n", argv[i]); return 2; }
     }
-    if (!file) { fprintf(stderr, "usage: simtest file.elf [-ms N|-c N] [-u] [-p B5].. [-v N -k sym] [-b func] [-s sym].. [-a sym].. [-m addr len]..\n"); return 2; }
+    if (!file) { fprintf(stderr, "usage: simtest file.elf [-ms N|-c N] [-u] [-p B5].. [-v N -k sym] [-b func] [-s sym].. [-a sym].. [-m addr len].. [-r ms byte]..\n"); return 2; }
 
     static elf_firmware_t f;
     memset(&f, 0, sizeof f);
@@ -108,6 +117,10 @@ int main(int argc, char **argv)
     avr_init(avr);
     avr_load_firmware(avr, &f);
 
+    uint32_t uflags = 0;
+    avr_ioctl(avr, AVR_IOCTL_UART_GET_FLAGS('0'), &uflags);
+    uflags &= ~AVR_UART_FLAG_STDIO;                      /* no echo of UART text on stdout */
+    avr_ioctl(avr, AVR_IOCTL_UART_SET_FLAGS('0'), &uflags);
     if (want_uart)
         avr_irq_register_notify(avr_io_getirq(avr, AVR_IOCTL_UART_GETIRQ('0'), UART_IRQ_OUTPUT), on_uart, NULL);
     for (int i = 0; i < npins; i++)
@@ -123,6 +136,8 @@ int main(int argc, char **argv)
 
     int in_isr = 0; unsigned long long enter = 0; unsigned kb = 0;
     while (avr->cycle < max_cycles) {
+        if (rx_next < nrx && avr->cycle >= rx_at[rx_next])  /* a byte "typed" into the UART receiver */
+            avr_raise_irq(avr_io_getirq(avr, AVR_IOCTL_UART_GETIRQ('0'), UART_IRQ_INPUT), rx_byte[rx_next++]);
         uint32_t pc = avr->pc;
         if (stop_sym && pc == sa) break;
         uint16_t op = avr->flash[pc] | (avr->flash[pc + 1] << 8);

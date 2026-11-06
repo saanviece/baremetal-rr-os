@@ -7,9 +7,9 @@
 
 === M2  UART transmit in registers ===
   PASS  bytes received = 'Hello, UART\r\n'
-  info  cycles between bytes = 18308; simavr counts 11 bits/char, so one bit = 1664 cycles
-  PASS  bit time = (UBRR+1) x 16 = 104 x 16 = 1664 cycles (+-8 cycles polling jitter) -> 9615 baud, +0.16 % vs 9600
-  info  note: real 8N1 hardware sends 10 bits/char = 16640 cycles/char; simavr's 11-bit model is ~10 % slower
+  info  cycles between bytes = 708; simavr counts 11 bits/char, so one bit = 64 cycles
+  PASS  bit time = (UBRR+1) x 16 = 4 x 16 = 64 cycles (+-8 cycles polling jitter) -> exactly 250000 baud
+  info  note: real 8N1 hardware sends 10 bits/char = 640 cycles/char; simavr's 11-bit model is ~10 % slower
 
 === M3  Timer1 1 ms tick interrupt ===
   PASS  tick interrupt ran 1099 times in 1100 ms
@@ -43,8 +43,8 @@
   PASS  199 tick interrupts in 200 ms
   PASS  first task running is task 1 (rr_current = 0x03b0)
   PASS  every interrupt switched to the next TCB in the ring: 1 -> 2 -> 3 -> 1 ...
-  PASS  all three tasks made progress: counters = [21744, 20981, 20418]
-  info  ISR cost, vector jmp to end of reti: [372] cycles = 23.2 us (2.33 % of one 1 ms tick)
+  PASS  all three tasks made progress: counters = [21700, 20834, 20374]
+  info  ISR cost, vector jmp to end of reti: [380] cycles = 23.8 us (2.38 % of one 1 ms tick)
 
 === M6  Round-Robin scheduler, dead tasks, idle ===
   info  who ran during each tick (task id, ticks in a row): T1x10 T2x10 T3x10 T1x10 T2x10 T3x10 T1x10 ...
@@ -56,45 +56,65 @@
   PASS  all tasks returned -> idle task (id 0) runs from tick ~3; ticks keep coming (99 in 100 ms)
   PASS  kernel started with no tasks -> idle only, no crash
 
-=== M7  demo: 3 tasks, 3 LEDs, UART rotation (main.elf, 5 s) ===
-  PASS  banner printed first: 'RR-OS: 3 tasks, 10 ms slice'
-  info  UART after the banner: T1 T2 T3 T1 T2 T3 T1 T2 T3 ...
-  PASS  48 lines in 5 s
-  PASS  lines are exactly T1 T2 T3 T1 T2 T3 ... : strict rotation, no garbled line
+=== M7  demo: 3 tasks, 3 LEDs, UART report lines (main.elf, 5 s) ===
+  PASS  start-up text printed first: 'RR-OS: a Round-Robin OS running 3 tasks on one CPU'
+  info  first report lines:
+  info          0.270 s | T1 has the CPU | turn     10 | D13 LED on
+  info          0.280 s | T2 has the CPU | turn     10 | D8 LED off
+  info          0.290 s | T3 has the CPU | turn     10 | D9 LED off
+  PASS  48 report lines in 5 s, all in the expected format (no garbled line)
+  PASS  lines come in strict rotation T1 T2 T3 T1 T2 T3 ...
+  PASS  numbers in the lines are exact: turn 10 at 0.270 / 0.280 / 0.290 s, turn 20 at 0.570 / 0.580 / 0.590 s, ...
+  PASS  every 'LED on' / 'LED off' in the lines matches the real pin level at that time
   PASS  B5: 19 toggles, mean 250.0 ms (want 250), worst single gap off by 20.0 ms
-  PASS  B0: 9 toggles, mean 498.8 ms (want 500), worst single gap off by 20.0 ms
+  PASS  B0: 9 toggles, mean 498.7 ms (want 500), worst single gap off by 20.0 ms
   PASS  B1: 4 toggles, mean 1000.0 ms (want 1000), worst single gap off by 20.0 ms
   PASS  no stack fault reported
-  PASS  task 1: used 49 of 128 stack bytes at most, canary intact
-  PASS  task 2: used 49 of 128 stack bytes at most, canary intact
-  PASS  task 3: used 49 of 128 stack bytes at most, canary intact
+  PASS  task 1: used 61 of 128 stack bytes at most, canary intact
+  PASS  task 2: used 61 of 128 stack bytes at most, canary intact
+  PASS  task 3: used 61 of 128 stack bytes at most, canary intact
   PASS  idle: used 37 of 128 stack bytes at most, canary intact
 
 === M8  measurements and stress tests ===
   info  -- 1. registers r0-r31 and flags C,T survive switches (3 assembly tasks, mirror-pair checksums) --
-  PASS  switch every tick (SLICE_TICKS=1): 1999 real task switches in 2000 ms, GPIOR0 fail flags = 0x00, checksum passes (heartbeats) per task = {'B5': 5286, 'B0': 8481, 'B1': 6793}
-  PASS  default 10-tick slices: 299 real task switches in 3000 ms, GPIOR0 fail flags = 0x00, checksum passes (heartbeats) per task = {'B5': 7943, 'B0': 12756, 'B1': 10219}
+  PASS  switch every tick (SLICE_TICKS=1): 1999 real task switches in 2000 ms, GPIOR0 fail flags = 0x00, checksum passes (heartbeats) per task = {'B5': 5283, 'B0': 8475, 'B1': 6790}
+  PASS  default 10-tick slices: 299 real task switches in 3000 ms, GPIOR0 fail flags = 0x00, checksum passes (heartbeats) per task = {'B5': 7943, 'B0': 12755, 'B1': 10218}
   info  -- negative controls: break the kernel on purpose, the same test must now FAIL --
   PASS  ISR corrupts r7 after every restore: test detects it (GPIOR0 fail flags = 0x07)
   PASS  ISR clears the carry flag after every restore: test detects it (GPIOR0 fail flags = 0x07)
   info  -- 2. tick period with the scheduler running (main.elf, 3 tasks) --
-  PASS  average tick period = 16000.001 cycles = 1.00000 ms over 1967 ticks
-  PASS  `ticks` in SRAM = 1967 = number of tick interrupts seen
+  PASS  average tick period = 16000.001 cycles = 1.00000 ms over 1985 ticks
+  PASS  `ticks` in SRAM = 1985 = number of tick interrupts seen
   info  -- 3. interrupt cost: vector jmp to end of reti (hardware entry adds 4 cycles more) --
-  PASS  196 switching ticks, 1771 non-switching ticks observed
+  PASS  198 switching ticks, 1787 non-switching ticks observed
   info  tick WITHOUT task change: 331..331 cycles (20.7 us)
-  info  tick WITH task change   : 372..372 cycles (23.2 us)  [+4 hardware entry]
-  info  overhead of the kernel: 2.09 % of CPU time (10 ticks = 160000 cycles per slice)
+  info  tick WITH task change   : 380..380 cycles (23.8 us)  [+4 hardware entry]
+  info  overhead of the kernel: 2.10 % of CPU time (10 ticks = 160000 cycles per slice)
   PASS  switch costs less than 400 cycles = 25 us
   info  -- 4. stack canary: deliberate overflow of task 2 --
   PASS  UART says: '!STACK OVERFLOW T2'
   PASS  kernel_fault = 3 (= task id 2 + 1)
   PASS  last completed tick handed the CPU to task 2 (tick 10); the very next tick found the canary smashed and halted the system
-  PASS  detection latency = 15802 cycles = 0.99 ms after task 2 got the CPU (at most one tick)
+  PASS  detection latency = 15794 cycles = 0.99 ms after task 2 got the CPU (at most one tick)
   PASS  no more ticks completed after the panic: kernel stopped (interrupts off)
   info  canary bytes of task 2 after overflow: 0101010101010101 (was a5a5a5a5a5a5a5a5)
   PASS  the canary really was overwritten
   info  task 1 canary intact: True (task 2's overflow ran downward into task 1's stack top, which is stale)
   PASS  control: same program recursing only 2 calls deep (~60 bytes) -> no false alarm
+
+=== M9  link to the dashboard: a switch frame per task change, only after 'T' (main.elf, 3 s) ===
+  PASS  no frame byte before 'T' was sent: the first one comes at 104.36 ms
+  PASS  29 report lines between the frames, none garbled
+  PASS  the lines still come in strict rotation T1 T2 T3
+  info  190 frames; first: tick 90, switch #9, T3 -> T1
+  PASS  190 frames while on: consecutive switch numbers, 10 ticks apart, none missing
+  PASS  after 't' at 2000 ms the frames stop (frames later: 0)
+  PASS  each frame's tick, switch number, paused task, next task and PORTB equal what the simulator recorded at that switch
+  PASS  each frame's stack: right address, saved SP inside it, canary intact, task_exit (0x023c) planted at the top
+  info  tick WITH task change: 380..380 cycles without frames, 3128..3128 cycles (196 us) while sending frames: 1.72 % more CPU time
+  PASS  a switch with a frame still takes far less than a tick (< 0.25 ms)
+  PASS  task 1: used 76 of 128 stack bytes with frames on, canary intact
+  PASS  task 2: used 76 of 128 stack bytes with frames on, canary intact
+  PASS  task 3: used 76 of 128 stack bytes with frames on, canary intact
 
 RESULT: ALL PASSED

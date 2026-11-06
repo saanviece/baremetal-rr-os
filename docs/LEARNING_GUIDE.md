@@ -7,14 +7,15 @@ Goal: be able to explain every line. Read in this order; each step is small and 
 | Step | Read | Time | You should be able to say |
 |------|------|------|---------------------------|
 | 1 | `docs/M1_blink.md`, `tests/fw/m1_blink.c` | 10 min | what DDR/PORT/PIN do; why `PINB = x` toggles |
-| 2 | `src/uart.c` (top half), `docs/M2_uart.md` | 15 min | how a byte leaves the chip; where 103 comes from |
+| 2 | `src/uart.c` (top half), `docs/M2_uart.md` | 15 min | how a byte leaves the chip; where UBRR = 3 (250000 baud) comes from |
 | 3 | `src/timer.c`, `docs/M3_tick.md`, `tests/fw/m3_tick.c` | 20 min | what an interrupt does; why OCR1A = 249 |
 | 4 | `src/kernel.h` (the TCB), `build_frame()` in `src/kernel.c`, `docs/M4_tcb_stack.md` | 30 min | what a task looks like when it is paused |
 | 5 | `src/context.h`, the ISR in `src/kernel.c`, `docs/M5_context_switch.md` | 45 min | every push/pop and why in that order |
 | 6 | `pick_next()`, `kernel_tick()`, `stack_ok()`, `docs/M6_scheduler.md` | 30 min | how Round-Robin chooses; idle; canary |
-| 7 | `uart_print()` + its ISR, `src/main.c`, `docs/M7_demo.md` | 30 min | why printing from tasks needs a buffer |
+| 7 | `uart_print()` + its ISR, `src/main.c`, `docs/M7_demo.md` | 40 min | why printing from tasks needs a buffer; how a report line is built |
 | 8 | `docs/ARCHITECTURE.md` (timeline), `docs/M8_tests.md`, `tests/fw/m8_regs.c` | 45 min | how you know it works |
-| 9 | `docs/VIVA_QA.md` | 30 min | answers in your own words |
+| 9 | `src/trace.c`, the `trace_switch()` call in `kernel_tick()`, `docs/M9_dashboard_link.md` | 30 min | how the dashboard sees every switch; what is in a frame; what it costs |
+| 10 | `docs/VIVA_QA.md` | 30 min | answers in your own words |
 
 Tip: open `build/main.lst` (`make disasm`) next to `__vector_11` and tick off each instruction against `context.h`.
 
@@ -76,13 +77,15 @@ read and write.
 **Canary.** Known bytes at the end of a stack. If they change, the stack overflowed into them.
 
 **Harvard architecture.** Code in flash and data in SRAM are separate address spaces. That is why string literals are copied to SRAM
-at start-up (the 66 bytes of `.data`) and why function pointers are *word* addresses in flash.
+at start-up (they are part of the 326 bytes of `.data`) unless they are marked `__flash`, like the start-up text in `main.c`, which is
+then read straight from flash with the `LPM` instruction. It is also why function pointers are *word* addresses in flash.
 
 **Why avr-gcc function pointers are "word addresses".** AVR instructions are 16 bits, so flash is addressed per word. The
 return address pushed on the stack is a word address, so `(uint16_t)fn` is exactly what has to be planted for `reti` to pop.
 
 ## Exercises (to be sure you own it)
-1. Change `SLICE_TICKS` to 50 and predict the T1/T2/T3 print rhythm; then run `python tests/run_tests.py m6` and the M7 test.
+1. Change `SLICE_TICKS` to 50 and predict the times in the report lines (turn 10 of T1, T2, T3); check with `python tools/run_demo.py 6`,
+   then see which checks of `python tests/run_tests.py m6 m7` now fail and why.
 2. In `context.h` swap two pops. Predict what breaks, then run `tests/run_tests.py m8`.
 3. Make `build_frame` put `0x55` in r5's slot and write a task that reads r5 at its start.
 4. Add a fourth LED task (you have `MAX_TASKS = 4`).

@@ -4,6 +4,7 @@ import os, subprocess, sys, glob
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SIMTEST = os.path.join(ROOT, "tools", "bin", "simtest.exe")
 CPU_HZ = 16_000_000
+RECORD_FIELDS = {"U": 3, "P": 4, "V": 5, "S": 3, "M": 3, "A": 3, "E": 5}   # see the list at the top of tools/simtest.c
 
 
 def _env():
@@ -39,7 +40,9 @@ def run(elf, ms=100, args=()):
     ev = {"U": [], "P": [], "V": [], "S": {}, "M": {}, "A": {}, "E": None}
     for line in r.stdout.splitlines():
         p = line.split()
-        if not p:
+        # simtest switches off simavr's echo of UART text, but to be safe skip anything that is
+        # not one of simtest's records (a record letter + its exact number of fields)
+        if not p or len(p) != RECORD_FIELDS.get(p[0]):
             continue
         if p[0] == "U":
             ev["U"].append((int(p[1]), int(p[2])))

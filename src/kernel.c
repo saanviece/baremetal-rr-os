@@ -5,8 +5,9 @@
 #include "timer.h"
 #include "context.h"
 #include "uart.h"
+#include "trace.h"
 
-tcb_t *volatile rr_current;                     /* task that owns the CPU right now */
+tcb_t *volatile rr_current;                    /* task that owns the CPU right now */
 
 static tcb_t   tcbs[MAX_TASKS + 1];             /* [0] = idle task, [1..MAX_TASKS] = user tasks */
 static uint8_t stacks[MAX_TASKS + 1][STACK_SIZE];
@@ -136,8 +137,11 @@ __attribute__((used)) void kernel_tick(void)
     slice_left = SLICE_TICKS;
     tcb_t *next = pick_next();
     if (next != rr_current) {
+        tcb_t *prev = rr_current;
         rr_current = next;                      /* the assembly after this call performs the switch */
         switches++;
+        if (trace_on)                           /* the dashboard asked for a frame per switch (trace.c) */
+            trace_switch(prev, next, ticks, switches);
     }
 }
 

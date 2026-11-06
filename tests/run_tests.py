@@ -1,9 +1,10 @@
-"""Run the simulator tests. Usage: python tests/run_tests.py [m1 m2 ...]   (default: all)"""
-import sys, os
+"""Run the simulator tests. Usage: python tests/run_tests.py [m1 m2 ... m9]   (default: all)"""
+import sys, os, re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from simlib import *
 
 SLICE = 10          # SLICE_TICKS default
+PRINT_EVERY = 10    # src/main.c: a demo task prints a line every 10th turn
 
 
 def t_m1():
@@ -29,9 +30,9 @@ def t_m2():
     gaps = [b[0] - a[0] for a, b in zip(ev["U"], ev["U"][1:])]
     bit = gaps[0] / 11          # simavr always counts 11 bits per character (it includes a parity slot)
     r.info(f"cycles between bytes = {gaps[0]}; simavr counts 11 bits/char, so one bit = {bit:.0f} cycles")
-    r.check(all(abs(g - 11 * 104 * 16) <= 8 for g in gaps),
-            "bit time = (UBRR+1) x 16 = 104 x 16 = 1664 cycles (+-8 cycles polling jitter) -> 9615 baud, +0.16 % vs 9600")
-    r.info("note: real 8N1 hardware sends 10 bits/char = 16640 cycles/char; simavr's 11-bit model is ~10 % slower")
+    r.check(all(abs(g - 11 * 4 * 16) <= 8 for g in gaps),
+            "bit time = (UBRR+1) x 16 = 4 x 16 = 64 cycles (+-8 cycles polling jitter) -> exactly 250000 baud")
+    r.info("note: real 8N1 hardware sends 10 bits/char = 640 cycles/char; simavr's 11-bit model is ~10 % slower")
     return r.fails
 
 
@@ -156,16 +157,52 @@ def stack_use(stacks, i):
     return 128 - first_used, set(st[:8]) == {0xA5}
 
 
+REPORT = re.compile(r"^ *(\d+)\.(\d{3}) s \| (T[123]) has the CPU \| turn +(\d+) \| (D13|D8|D9) LED (on|off)$")
+LED_OF = {"T1": ("D13", "B5"), "T2": ("D8", "B0"), "T3": ("D9", "B1")}     # task -> (pin name printed, port pin)
+
+
+def pin_level(events, pin, cycle):
+    """Level of `pin` at `cycle`, from the pin-change events (low before its first change)."""
+    level = 0
+    for c, p, v in events:
+        if c > cycle:
+            break
+        if p == pin:
+            level = v
+    return level
+
+
+def expected_report(n):
+    """(turn, time in ms) that report line n must show. Task n % 3 first runs at tick SLICE * (n % 3) and gets a turn
+    every 3 * SLICE ticks, so its turn k starts at tick 3 * SLICE * (k - 1) + SLICE * (n % 3)."""
+    turn = PRINT_EVERY * (n // 3 + 1)
+    return turn, 3 * SLICE * (turn - 1) + SLICE * (n % 3)
+
+
 def t_m7():
-    r = Report("M7  demo: 3 tasks, 3 LEDs, UART rotation (main.elf, 5 s)")
-    ev = run(build("main"), ms=5000, args=["-u", "-p", "B5", "-p", "B0", "-p", "B1", "-s", "kernel_fault", "-s", "stacks"])
+    r = Report("M7  demo: 3 tasks, 3 LEDs, UART report lines (main.elf, 5 s)")
+    ev = run(build("main"), ms=5000, args=["-u", "-p", "B5", "-p", "B0", "-p", "B1", "-v", "11",
+                                           "-s", "kernel_fault", "-s", "stacks"])
     text = bytes(b for _, b in ev["U"]).decode()
-    banner = "RR-OS: 3 tasks, 10 ms slice\r\n"
-    r.check(text.startswith(banner), f"banner printed first: {banner.strip()!r}")
-    lines = text[len(banner):].split("\r\n")[:-1]
-    r.info("UART after the banner: " + " ".join(lines[:9]) + " ...")
-    r.check(len(lines) >= 45, f"{len(lines)} lines in 5 s")
-    r.check(lines == [f"T{i % 3 + 1}" for i in range(len(lines))], "lines are exactly T1 T2 T3 T1 T2 T3 ... : strict rotation, no garbled line")
+    intro, sep, body = text.partition("a task prints a line:\r\n\r\n")
+    r.check(intro.startswith("\r\nRR-OS: ") and sep != "", "start-up text printed first: " + repr(intro.split("\r\n")[1]))
+    lines = body.split("\r\n")[:-1]                     # complete lines only
+    r.info("first report lines:")
+    for line in lines[:3]:
+        r.info("    " + line)
+    found = [REPORT.match(line) for line in lines]
+    r.check(len(lines) >= 30 and all(found), f"{len(lines)} report lines in 5 s, all in the expected format (no garbled line)")
+    found = [m for m in found if m]
+    names = [m.group(3) for m in found]
+    r.check(names == [f"T{i % 3 + 1}" for i in range(len(names))], "lines come in strict rotation T1 T2 T3 T1 T2 T3 ...")
+    times = [int(m.group(1)) * 1000 + int(m.group(2)) for m in found]
+    exact = all((int(m.group(4)), times[n]) == expected_report(n) and m.group(5) == LED_OF[m.group(3)][0]
+                for n, m in enumerate(found))
+    r.check(exact, "numbers in the lines are exact: turn 10 at 0.270 / 0.280 / 0.290 s, turn 20 at 0.570 / 0.580 / 0.590 s, ...")
+    # Tick k is the k-th run of vector 11; sample the LED pin 5 ms into the slice that tick started.
+    truthful = all((pin_level(ev["P"], LED_OF[m.group(3)][1], ev["V"][times[n] - 1][1] + 5 * 16000) == 1) == (m.group(6) == "on")
+                   for n, m in enumerate(found))
+    r.check(truthful, "every 'LED on' / 'LED off' in the lines matches the real pin level at that time")
     for pin, half in (("B5", 250), ("B0", 500), ("B1", 1000)):
         t = [c for c, p, v in ev["P"] if p == pin]
         gaps = [(b - a) / 16000 for a, b in zip(t, t[1:])]
@@ -241,7 +278,68 @@ def t_m8():
     return r.fails
 
 
-TESTS = {"m1": t_m1, "m2": t_m2, "m3": t_m3, "m4": t_m4, "m5": t_m5, "m6": t_m6, "m7": t_m7, "m8": t_m8}
+FRAME_LEN = 141     # src/trace.c: 13-byte head + the paused task's 128-byte stack
+
+
+def split_stream(uart):
+    """[(cycle, byte)] -> (text, frames). A byte >= 0x80 starts a frame (text never has bit 7 set)."""
+    text, frames, i = bytearray(), [], 0
+    while i < len(uart):
+        c, b = uart[i]
+        if b >= 0x80 and i + FRAME_LEN <= len(uart):
+            f = bytes(x for _, x in uart[i:i + FRAME_LEN])
+            frames.append(dict(cycle=c, to=f[0] & 0x7F, tick=int.from_bytes(f[1:5], "little"), nsw=u16(f, 5), frm=f[7],
+                               portb=f[8], sp=u16(f, 9), low=u16(f, 11), stack=f[13:]))
+            i += FRAME_LEN
+            continue
+        text.append(b)
+        i += 1
+    return text.decode("ascii"), frames
+
+
+def t_m9():
+    r = Report("M9  link to the dashboard: a switch frame per task change, only after 'T' (main.elf, 3 s)")
+    T_ON, T_OFF = 100, 2000                              # ms: the simulated PC sends 'T', later 't'
+    ev = run(build("main"), ms=3000, args=["-u", "-r", str(T_ON), "84", "-r", str(T_OFF), "116", "-v", "11", "-k", "rr_current",
+                                           "-p", "B5", "-p", "B0", "-p", "B1", "-s", "stacks", "-a", "tcbs", "-a", "stacks", "-a", "task_exit"])
+    A, uart, V = ev["A"], ev["U"], ev["V"]
+    first = next((k for k, (_, b) in enumerate(uart) if b >= 0x80), None)
+    r.check(first is not None and uart[first][0] > T_ON * 16000, f"no frame byte before 'T' was sent: the first one comes at {uart[first][0] / 16000:.2f} ms")
+    text, frames = split_stream(uart)
+    lines = text.partition("a task prints a line:\r\n\r\n")[2].split("\r\n")[:-1]
+    r.check(len(lines) >= 25 and all(REPORT.match(l) for l in lines), f"{len(lines)} report lines between the frames, none garbled")
+    names = [REPORT.match(l).group(3) for l in lines]
+    r.check(names == [f"T{i % 3 + 1}" for i in range(len(names))], "the lines still come in strict rotation T1 T2 T3")
+    on = [f for f in frames if f["cycle"] < T_OFF * 16000 + 16000]
+    late = [f for f in frames if f["cycle"] >= T_OFF * 16000 + 16000]
+    r.info(f"{len(frames)} frames; first: tick {frames[0]['tick']}, switch #{frames[0]['nsw']}, T{frames[0]['frm']} -> T{frames[0]['to']}")
+    r.check(len(on) > 150 and all(b["nsw"] == a["nsw"] + 1 and b["tick"] - a["tick"] == SLICE for a, b in zip(on, on[1:])),
+            f"{len(on)} frames while on: consecutive switch numbers, 10 ticks apart, none missing")
+    r.check(late == [], f"after 't' at {T_OFF} ms the frames stop (frames later: {len(late)})")
+    # every frame against the simulator's own record of that switch
+    sw = [v for v in V if v[2] != v[3]]                 # tick interrupts that changed rr_current
+    tid = lambda a: (a - A["tcbs"]) // 8
+    def pins_at(cycle):
+        return sum(m for pin, m in (("B5", 0x20), ("B0", 0x01), ("B1", 0x02)) if pin_level(ev["P"], pin, cycle))
+    match = all(f["nsw"] <= len(sw) and V.index(sw[f["nsw"] - 1]) + 1 == f["tick"] and tid(sw[f["nsw"] - 1][2]) == f["frm"]
+                and tid(sw[f["nsw"] - 1][3]) == f["to"] and pins_at(sw[f["nsw"] - 1][1]) == f["portb"] for f in on)
+    r.check(match, "each frame's tick, switch number, paused task, next task and PORTB equal what the simulator recorded at that switch")
+    exit_w = A["task_exit"] // 2
+    stack_ok = all(f["low"] == A["stacks"] + 128 * f["frm"] and f["low"] <= f["sp"] < f["low"] + 128 - 35
+                   and f["stack"][:8] == b"\xa5" * 8 and (f["stack"][126] << 8 | f["stack"][127]) == exit_w for f in on)
+    r.check(stack_ok, f"each frame's stack: right address, saved SP inside it, canary intact, task_exit ({exit_w:#06x}) planted at the top")
+    cost = [v[1] - v[0] for v in sw if T_ON * 16000 < v[0] < T_OFF * 16000]
+    plain = [v[1] - v[0] for v in sw if v[0] > T_OFF * 16000 + 16000]
+    r.info(f"tick WITH task change: {min(plain)}..{max(plain)} cycles without frames, {min(cost)}..{max(cost)} cycles "
+           f"({max(cost) / 16:.0f} us) while sending frames: {(max(cost) - max(plain)) / 160000 * 100:.2f} % more CPU time")
+    r.check(max(cost) < 16000 // 4, "a switch with a frame still takes far less than a tick (< 0.25 ms)")
+    for i in (1, 2, 3):
+        used, ok = stack_use(ev["S"]["stacks"], i)
+        r.check(ok and used < 128 - 8 - 16, f"task {i}: used {used} of 128 stack bytes with frames on, canary intact")
+    return r.fails
+
+
+TESTS = {"m1": t_m1, "m2": t_m2, "m3": t_m3, "m4": t_m4, "m5": t_m5, "m6": t_m6, "m7": t_m7, "m8": t_m8, "m9": t_m9}
 
 if __name__ == "__main__":
     names = [a.lower() for a in sys.argv[1:]] or list(TESTS)

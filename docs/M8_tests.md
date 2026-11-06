@@ -10,19 +10,22 @@ Run everything with `python tests/run_tests.py` (or `make test`). The full real 
 | 1 | Do tasks run in Round-Robin order? | Sample `rr_current` at every tick (M5/M6 tests) | runs of exactly 10 ticks, order 1,2,3,1,2,3 (39 slices checked) |
 | 2 | Do registers and flags survive a switch? | `tests/fw/m8_regs.c`: 3 assembly tasks, each keeps 32 registers as 16 mirror pairs (`r<k>` == `r<k+16>`), adds 1 to all of them every loop, and checks flags C and T across a wait | 1999 switches (1 per tick) and 299 switches (10-tick slices): **0 failures**; 5 000 to 12 000 checksum passes per task |
 | 2b | Can that test fail at all? | Mutation test: rebuild the kernel with a deliberate bug (`-DFAULT_R7` corrupts r7, `-DFAULT_CARRY` clears C after every restore) | both bugs detected (`GPIOR0` fail flags set) |
-| 3 | Is the tick period right? | Cycle number of every tick interrupt | average 16000.001 cycles = 1.00000 ms (the 1-4 cycle jitter per tick is the CPU finishing its current instruction) |
-| 4 | What does the kernel cost? | Cycles from the vector's first instruction to the end of `reti` (+4 for hardware entry) | tick without task change 331 cycles (20.7 us); tick with task change 372 cycles (23.2 us); about 2.1 % of the CPU |
+| 3 | Is the tick period right? | Cycle number of every tick interrupt | average 16000.001 cycles = 1.00000 ms over 1985 ticks; in a separate 6 s run of the demo a single tick started at most 24 cycles (1.5 us) late, because it waits for the current instruction, a short critical section or the UART interrupt to finish |
+| 4 | What does the kernel cost? | Cycles from the vector's first instruction to the end of `reti` (+4 for hardware entry) | tick without task change 331 cycles (20.7 us); tick with task change 380 cycles (23.8 us); about 2.1 % of the CPU. With the dashboard's frames on, a switch takes 3128 cycles (196 us), see M9 |
 | 5 | Does the canary catch an overflow? | Task 2 recurses until its stack is exceeded (`m8_overflow.c`) | `!STACK OVERFLOW T2` printed, `kernel_fault` = 3, detected 0.99 ms (one tick) after the task got the CPU, kernel halted |
 | 5b | False alarms? | Same program with 2 calls deep; and the 5 s demo | none |
-| 6 | How much stack is really used? | `0xA5` fill pattern high-water mark after the 5 s demo | tasks 49 of 128 bytes, idle 37 of 128 |
+| 6 | How much stack is really used? | `0xA5` fill pattern high-water mark after the 5 s demo | tasks 61 of 128 bytes, idle 37 of 128 |
 
 ## Things the measurements taught me (good viva material)
 * The first version of my overflow control "failed": a task needs room for its **37-byte saved context at any tick**, so
-  the usable stack is about 128 - 8 (guard) - 37 = **83 bytes**, not 128.
+  the usable stack is much less than 128. Counted exactly (see ARCHITECTURE.md, section 4): 35 bytes of context + 2 for
+  `call kernel_tick` + 6 that `kernel_tick` itself uses = 43 bytes at every tick, so about 128 - 8 (guard) - 43 = **77 bytes**
+  are left for the task (about 62 while the dashboard's frames are on). An earlier version of these notes said 83, because it
+  counted only 37 bytes and forgot `kernel_tick`'s own 6.
 * The first overflow test only wrote 2 bytes of each 24-byte frame, so the guard bytes stayed `0xA5`, yet the overflow was
   still caught because the kernel also checks that the saved **SP** is not inside the guard zone. Two checks are better than one.
 * simavr's UART model counts 11 bits per character (it always includes a parity slot) while 8N1 hardware sends 10, so the
-  serial text is about 10 % slower in the simulator than on a real board. The bit time (1664 cycles) matches the formula.
+  serial text is about 10 % slower in the simulator than on a real board. The bit time (64 cycles at 250000 baud) matches the formula.
 * A tick costs 331 cycles now, versus 202 cycles for the bare M5 switch. The difference is the stack check plus the slice logic
   added in M6; I did not profile them separately (the 8-byte canary loop is the first suspect). I kept the readable code.
 
