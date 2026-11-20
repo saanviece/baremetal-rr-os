@@ -4,3 +4,6 @@ tools/bin/
 *.elf
 *.hex
 __pycache__/
+
+# private working notes
+docs/SESSION_HANDOFF.md
